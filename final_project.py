@@ -1,5 +1,6 @@
 from OpenGL.GL import *
 from OpenGL.GLUT import *
+from OpenGL.GLUT import GLUT_BITMAP_HELVETICA_18
 from OpenGL.GLU import *
 from math import radians, cos, sin, atan2, degrees
 import random
@@ -19,7 +20,7 @@ player_speed = 20.0
 player_size = 50.0
 
 score = 0
-life = 3
+life = 4
 game_over = False
 
 # Camera controls
@@ -36,16 +37,36 @@ TREASURE_PULSE_SPEED = 0.01
 LEVEL = 1
 
 # Enemy globals
-enemies = []  # list of dicts: {'x': , 'y': , 'size': , 'speed': }
+enemies = []  # list of dicts: {'x': , 'y': , 'size': , 'speed': , 'type': , 'projectile': {...}}
 ENEMY_SIZE = player_size * 0.6
 ENEMY_BASE_SPEED = 5.0
 
+# Power-up globals
+power_ups = []  # list of dicts: {'x': , 'y': , 'size': , 'type': 'health'|'immortal', 'active': True}
+power_up_size = player_size * 0.6
+power_up_types = ['health', 'immortal']
+power_up_chance = 0.5
+
+# Immortality state
+immortal = False
+immortal_timer = 0.0
+immortal_duration = 15.0  # seconds
+
+# Projectiles
+projectiles = []  # list of dicts: {'x': , 'y': , 'vx': , 'vy': , 'size': , 'active': True}
+projectile_size = player_size * 0.2
+projectile_speed = 15.0
+
+# Timer
+level_timer = 60  # seconds per level
+timer_start = None
+
 LEVEL_ENEMY_CONFIG = {
-    1: {'num_enemies': 0, 'speed': 0},
-    2: {'num_enemies': 2, 'speed': 0.1},
-    3: {'num_enemies': 3, 'speed': 0.2},
-    4: {'num_enemies': 4, 'speed': 0.5},
-    5: {'num_enemies': 5, 'speed': 0.7},
+    1: {'num_enemies': 0, 'speed': 0.0, 'projectile_enemies': 0, 'projectile_speed': 0.0},
+    2: {'num_enemies': 1, 'speed': 0.1, 'projectile_enemies': 1, 'projectile_speed': 0.3},
+    3: {'num_enemies': 2, 'speed': 0.2, 'projectile_enemies': 2, 'projectile_speed': 0.4},
+    4: {'num_enemies': 3, 'speed': 0.5, 'projectile_enemies': 3, 'projectile_speed': 0.6},
+    5: {'num_enemies': 4, 'speed': 0.7, 'projectile_enemies': 4, 'projectile_speed': 0.7},
 }
 
 # Initial values for restart
@@ -66,29 +87,34 @@ def restart_game():
     global player_x, player_y, player_z, player_rotate_z
     global score, life, game_over
     global cam_theta, cam_radius, cam_height, camera_pos
-    global treasures, LEVEL, enemies
-    
+    global treasures, LEVEL, enemies, power_ups, immortal, immortal_timer, projectiles, timer_start
+
     # Reset player position and rotation
     player_x = INITIAL_PLAYER_X
     player_y = INITIAL_PLAYER_Y
     player_z = INITIAL_PLAYER_Z
     player_rotate_z = INITIAL_PLAYER_ROTATE_Z
-    
+
     # Reset game state
     score = INITIAL_SCORE
     life = INITIAL_LIFE
     game_over = False
     LEVEL = INITIAL_LEVEL
-    
+    immortal = False
+    immortal_timer = 0.0
+    projectiles = []
+    timer_start = time.time()
+
     # Reset camera 
     cam_theta = INITIAL_CAM_THETA
     cam_radius = INITIAL_CAM_RADIUS
     cam_height = INITIAL_CAM_HEIGHT
     camera_pos = INITIAL_CAMERA_POS  
-    
-    # Reinitialize treasures and enemies
+
+    # Reinitialize treasures, enemies, power-ups
     init_treasures()
     init_enemies()
+    init_power_ups()
 
 
 def draw_text(x, y, text, font=GLUT_BITMAP_HELVETICA_18):
@@ -228,11 +254,27 @@ def init_treasures():
 def init_enemies():
     global enemies, LEVEL
     enemies = []
-    config = LEVEL_ENEMY_CONFIG.get(LEVEL, {'num_enemies': 0, 'speed': ENEMY_BASE_SPEED})
+    config = LEVEL_ENEMY_CONFIG.get(LEVEL, {'num_enemies': 0, 'speed': ENEMY_BASE_SPEED, 'projectile_enemies': 0, 'projectile_speed': projectile_speed})
+    # Normal enemies
     for _ in range(config['num_enemies']):
         ex = random.uniform(-GRID_LENGTH + ENEMY_SIZE, GRID_LENGTH - ENEMY_SIZE)
         ey = random.uniform(-GRID_LENGTH + ENEMY_SIZE, GRID_LENGTH - ENEMY_SIZE)
-        enemies.append({'x': ex, 'y': ey, 'size': ENEMY_SIZE, 'speed': config['speed']})
+        enemies.append({'x': ex, 'y': ey, 'size': ENEMY_SIZE, 'speed': config['speed'], 'type': 'normal', 'projectile': None})
+    # Block tower (projectile) enemies
+    for _ in range(config['projectile_enemies']):
+        ex = random.uniform(-GRID_LENGTH + ENEMY_SIZE, GRID_LENGTH - ENEMY_SIZE)
+        ey = random.uniform(-GRID_LENGTH + ENEMY_SIZE, GRID_LENGTH - ENEMY_SIZE)
+        enemies.append({'x': ex, 'y': ey, 'size': ENEMY_SIZE, 'speed': config['speed'], 'type': 'block_tower', 'projectile': None})
+
+def init_power_ups():
+    global power_ups, LEVEL
+    power_ups = []
+    # 50% chance to spawn a power-up per level
+    if random.random() < power_up_chance:
+        px = random.uniform(-GRID_LENGTH + power_up_size, GRID_LENGTH - power_up_size)
+        py = random.uniform(-GRID_LENGTH + power_up_size, GRID_LENGTH - power_up_size)
+        ptype = random.choice(power_up_types)
+        power_ups.append({'x': px, 'y': py, 'size': power_up_size, 'type': ptype, 'active': True})
 
 # --------------------------------------------
 def draw_treasures():
@@ -247,44 +289,104 @@ def draw_treasures():
         glColor3f(1.0, 1.0, 0.0)
         glPushMatrix()
         glTranslatef(t['x'], t['y'], t['size'] / 2)
+        # Spinning treasures
+        glRotatef(time.time() * 100 % 360, 0, 0, 1)
         glutSolidCube(t['size'])
         glPopMatrix()
 
 # --------------------------------------------
 def draw_enemies():
     global enemies
-    glColor3f(1.0, 0.0, 0.0)
     for e in enemies:
+        if e['type'] == 'normal':
+            glColor3f(1.0, 0.0, 0.0)
+            glPushMatrix()
+            glTranslatef(e['x'], e['y'], e['size']/2)
+            glutSolidCube(e['size'])
+            glPopMatrix()
+        elif e['type'] == 'block_tower':
+            glColor3f(0.7, 0.3, 0.9)
+            glPushMatrix()
+            glTranslatef(e['x'], e['y'], e['size']/2)
+            # Draw block tower as a tall cuboid
+            glScalef(1, 1, 2)
+            glutSolidCube(e['size']/1.5)
+            glPopMatrix()
+
+# --------------------------------------------
+def draw_power_ups():
+    global power_ups
+    for p in power_ups:
+        if not p['active']:
+            continue
+        if p['type'] == 'health':
+            glColor3f(0.0, 1.0, 1.0)
+        elif p['type'] == 'immortal':
+            glColor3f(0.8, 0.5, 0.5)
+        else:
+            glColor3f(0.0, 0.7, 1.0)
         glPushMatrix()
-        glTranslatef(e['x'], e['y'], e['size']/2)
-        glutSolidCube(e['size'])
+        glTranslatef(p['x'], p['y'], p['size']/2)
+        glutSolidSphere(p['size']/2, 20, 20)
         glPopMatrix()
 
 # --------------------------------------------
+def draw_projectiles():
+    global projectiles
+    glColor3f(1.0, 0.0, 0.0)
+    for pr in projectiles:
+        if not pr['active']:
+            continue
+        glPushMatrix()
+        glTranslatef(pr['x'], pr['y'], pr['size']/2)
+        glutSolidSphere(pr['size']/2, 10, 10)
+        glPopMatrix()
+# --------------------------------------------
 def move_enemies():
-    global enemies, player_x, player_y
+    global enemies, player_x, player_y, projectiles, LEVEL
+    config = LEVEL_ENEMY_CONFIG.get(LEVEL, {'projectile_speed': projectile_speed})
     for e in enemies:
         dx = player_x - e['x']
         dy = player_y - e['y']
         dist = (dx**2 + dy**2)**0.5
-        
-        # Only move if there's a minimum distance threshold
-        if dist > 5.0: 
-            # Normalize direction and apply consistent speed
-            normalized_dx = dx / dist
-            normalized_dy = dy / dist
-            e['x'] += e['speed'] * normalized_dx
-            e['y'] += e['speed'] * normalized_dy
+        if e['type'] == 'normal':
+            if dist > 5.0: 
+                normalized_dx = dx / dist
+                normalized_dy = dy / dist
+                e['x'] += e['speed'] * normalized_dx
+                e['y'] += e['speed'] * normalized_dy
+        elif e['type'] == 'block_tower':
+            has_active = False
+            for pr in projectiles:
+                if pr.get('source') == id(e) and pr['active']:
+                    has_active = True
+                    break
+            if not has_active and random.random() < 0.02:
+                if dist > 10.0:
+                    pr_dx = dx / dist
+                    pr_dy = dy / dist
+                    projectiles.append({'x': e['x'], 'y': e['y'], 'vx': pr_dx * config['projectile_speed'], 'vy': pr_dy * config['projectile_speed'], 'size': projectile_size, 'active': True, 'source': id(e)})
+
+def move_projectiles():
+    global projectiles
+    for pr in projectiles:
+        if not pr['active']:
+            continue
+        pr['x'] += pr['vx']
+        pr['y'] += pr['vy']
+        if abs(pr['x']) > GRID_LENGTH or abs(pr['y']) > GRID_LENGTH:
+            pr['active'] = False
 
 def check_enemy_collision():
-    global enemies, player_x, player_y, life, game_over
+    global enemies, player_x, player_y, life, game_over, immortal
     player_radius = player_size * 0.5
     for e in enemies[:]:  # iterate over a copy so we can remove enemies
         dx = player_x - e['x']
         dy = player_y - e['y']
         distance = (dx**2 + dy**2)**0.5
         if distance < (player_radius + e['size']/2):
-            life -= 1
+            if not immortal:
+                life -= 1
             enemies.remove(e)  # remove the enemy after collision
             if life <= 0:
                 life = 0
@@ -292,8 +394,26 @@ def check_enemy_collision():
                 return
 
 
+def check_projectile_collision():
+    global projectiles, player_x, player_y, life, game_over, immortal
+    player_radius = player_size * 0.5
+    for pr in projectiles:
+        if not pr['active']:
+            continue
+        dx = player_x - pr['x']
+        dy = player_y - pr['y']
+        distance = (dx**2 + dy**2)**0.5
+        if distance < (player_radius + pr['size']/2):
+            if not immortal:
+                life -= 1
+            pr['active'] = False
+            if life <= 0:
+                life = 0
+                game_over = True
+                return
+
 def check_treasure_collision():
-    global treasures, player_x, player_y, score, LEVEL
+    global treasures, player_x, player_y, score, LEVEL, timer_start, projectiles
     player_radius = player_size * 0.5
     for t in treasures[:]:
         dx = player_x - t['x']
@@ -307,9 +427,29 @@ def check_treasure_collision():
         LEVEL += 1
         init_treasures()
         init_enemies()
+        init_power_ups()
+        projectiles = []
+        timer_start = time.time()
+
+def check_power_up_collision():
+    global power_ups, player_x, player_y, life, immortal, immortal_timer
+    player_radius = player_size * 0.5
+    for p in power_ups:
+        if not p['active']:
+            continue
+        dx = player_x - p['x']
+        dy = player_y - p['y']
+        distance = (dx**2 + dy**2)**0.5
+        if distance < (player_radius + p['size']/2):
+            if p['type'] == 'health':
+                life += 1
+            else:
+                immortal = True
+                immortal_timer = immortal_duration
+            p['active'] = False
 
 def keyboardListener(key, x, y):
-    global player_x, player_y, player_rotate_z, player_speed, score, life, game_over
+    global player_x, player_y, player_rotate_z, player_speed, score, life, game_over, immortal
 
     if isinstance(key, bytes):
         k = key.decode('utf-8').lower()
@@ -376,11 +516,21 @@ def setupCamera():
 
 
 def idle():
+    global immortal, immortal_timer, game_over, timer_start, level_timer
+    if immortal:
+        immortal_timer -= 0.02
+        if immortal_timer <= 0:
+            immortal = False
+            immortal_timer = 0.0
+    if timer_start and not game_over:
+        elapsed = time.time() - timer_start
+        if elapsed > level_timer:
+            game_over = True
     glutPostRedisplay()
 
 
 def showScreen():
-    global life, game_over
+    global life, game_over, immortal, timer_start, level_timer
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glLoadIdentity()
     glViewport(0, 0, 1000, 800)
@@ -391,22 +541,34 @@ def showScreen():
     draw_player()
     draw_treasures()
     draw_enemies()
-    
+    draw_power_ups()
+    draw_projectiles()
+
     move_enemies()
+    move_projectiles()
     check_treasure_collision()
     check_enemy_collision()
+    check_projectile_collision()
+    check_power_up_collision()
 
-    if life <= 0:
+    if life <= 0 or (timer_start and (time.time() - timer_start) > level_timer):
         game_over = True
         draw_text(400, 400, "GAME OVER! Press R to restart")
 
     draw_text(10, 770, f"Score: {score}")
     draw_text(10, 750, f"Level: {LEVEL}")
     draw_text(10, 720, f"Life: {life}")
+    if immortal:
+        draw_text(10, 700, f"IMMORTAL: {int(immortal_timer)}s")
+    # Timer display
+    if timer_start:
+        remaining = max(0, int(level_timer - (time.time() - timer_start)))
+        draw_text(10, 680, f"Time Left: {remaining}s")
 
     glutSwapBuffers()
 
 def main():
+    global timer_start
     glutInit()
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
     glutInitWindowSize(1000, 800)
@@ -421,9 +583,11 @@ def main():
     glutSpecialFunc(specialKeyListener)
     glutMouseFunc(mouseListener)
     glutIdleFunc(idle)
-    
+
     init_treasures()
     init_enemies()
+    init_power_ups()
+    timer_start = time.time()
 
     glutMainLoop()
 
