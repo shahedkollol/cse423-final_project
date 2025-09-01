@@ -61,7 +61,7 @@ power_up_chance = 0.5
 # Immortality state
 immortal = False
 immortal_timer = 0.0
-immortal_duration = 240  # seconds
+immortal_duration = 50  # seconds
 
 # Projectiles
 projectiles = []  # list of dicts: {'x': , 'y': , 'vx': , 'vy': , 'size': , 'active': True, 'source': , 'damage': }
@@ -567,9 +567,9 @@ def move_boss():
             projectiles.append({
                 'x': boss['x'], 
                 'y': boss['y'], 
-                'vx': pr_dx * 2.5,  # Further reduced from 4.0 to 2.5
-                'vy': pr_dy * 2.5, 
-                'size': projectile_size * 2, 
+                'vx': pr_dx * 1.2,  # Further reduced from 4.0 to 2.5
+                'vy': pr_dy * 1.2, 
+                'size': projectile_size * 1.3, 
                 'active': True, 
                 'source': 'boss',
                 'damage': 2
@@ -736,7 +736,7 @@ def keyboardListener(key, x, y):
         # Toggle immortal mode
         immortal = not immortal
         if immortal:
-            immortal_timer = immortal_duration
+            immortal_timer = 10000
         else:
             immortal_timer = 0.0
     elif k == 'c':
