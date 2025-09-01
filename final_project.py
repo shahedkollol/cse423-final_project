@@ -22,6 +22,10 @@ player_size = 50.0
 score = 0
 life = 4
 game_over = False
+game_won = False
+
+# Display settings
+dark_mode = False
 
 # Camera controls
 cam_theta = 45.0
@@ -41,28 +45,39 @@ enemies = []  # list of dicts: {'x': , 'y': , 'size': , 'speed': , 'type': , 'pr
 ENEMY_SIZE = player_size * 0.6
 ENEMY_BASE_SPEED = 5.0
 
+# Boss globals
+boss = None  # dict: {'x': , 'y': , 'size': , 'speed': , 'health': , 'shoot_timer': }
+BOSS_SIZE = player_size * 1.0  # Reduced from 2.5 to 2.0
+BOSS_SPEED = .4
+BOSS_HEALTH = 10
+BOSS_SHOOT_COOLDOWN = 60  # frames between shots
+
 # Power-up globals
 power_ups = []  # list of dicts: {'x': , 'y': , 'size': , 'type': 'health'|'immortal', 'active': True}
-power_up_size = player_size * 0.6
+power_up_size = player_size * 0.5
 power_up_types = ['health', 'immortal']
 power_up_chance = 0.5
 
 # Immortality state
 immortal = False
 immortal_timer = 0.0
-immortal_duration = 15.0  # seconds
+immortal_duration = 50  # seconds
 
 # Projectiles
-projectiles = []  # list of dicts: {'x': , 'y': , 'vx': , 'vy': , 'size': , 'active': True}
+projectiles = []  # list of dicts: {'x': , 'y': , 'vx': , 'vy': , 'size': , 'active': True, 'source': , 'damage': }
 projectile_size = player_size * 0.2
 projectile_speed = 15.0
 
 # Timer
-level_timer = 60  # seconds per level
+level_timer = 120  # seconds per level
 timer_start = None
 
+# Traps
+traps = []  # list of dicts: {'x': , 'y': , 'size': }
+TRAP_SIZE = player_size * 0.8
+
 LEVEL_ENEMY_CONFIG = {
-    1: {'num_enemies': 0, 'speed': 0.0, 'projectile_enemies': 0, 'projectile_speed': 0.0},
+    1: {'num_enemies': 0, 'speed': 0.1, 'projectile_enemies': 0, 'projectile_speed': 0.0},  # Only boss in level 1
     2: {'num_enemies': 1, 'speed': 0.1, 'projectile_enemies': 1, 'projectile_speed': 0.3},
     3: {'num_enemies': 2, 'speed': 0.2, 'projectile_enemies': 2, 'projectile_speed': 0.4},
     4: {'num_enemies': 3, 'speed': 0.5, 'projectile_enemies': 3, 'projectile_speed': 0.6},
@@ -85,9 +100,9 @@ INITIAL_LEVEL = 1
 def restart_game():
     # Reset all game variables
     global player_x, player_y, player_z, player_rotate_z
-    global score, life, game_over
+    global score, life, game_over, game_won
     global cam_theta, cam_radius, cam_height, camera_pos
-    global treasures, LEVEL, enemies, power_ups, immortal, immortal_timer, projectiles, timer_start
+    global treasures, LEVEL, enemies, power_ups, immortal, immortal_timer, projectiles, timer_start, traps, boss
 
     # Reset player position and rotation
     player_x = INITIAL_PLAYER_X
@@ -99,10 +114,13 @@ def restart_game():
     score = INITIAL_SCORE
     life = INITIAL_LIFE
     game_over = False
+    game_won = False
     LEVEL = INITIAL_LEVEL
     immortal = False
     immortal_timer = 0.0
     projectiles = []
+    traps = []
+    boss = None
     timer_start = time.time()
 
     # Reset camera 
@@ -111,10 +129,12 @@ def restart_game():
     cam_height = INITIAL_CAM_HEIGHT
     camera_pos = INITIAL_CAMERA_POS  
 
-    # Reinitialize treasures, enemies, power-ups
+    # Reinitialize treasures, enemies, power-ups, traps
     init_treasures()
     init_enemies()
     init_power_ups()
+    init_traps()
+    init_boss()
 
 
 def draw_text(x, y, text, font=GLUT_BITMAP_HELVETICA_18):
@@ -146,10 +166,27 @@ def draw_floor():
 
     for i in range(-half_size, half_size, tile_size):
         for j in range(-half_size, half_size, tile_size):
-            if ((i // tile_size) + (j // tile_size)) % 2 == 0:
-                glColor3f(0.8, 0.8, 0.8)
+            # Check if this tile is a trap
+            is_trap = False
+            for trap in traps:
+                trap_tile_x = int(trap['x'] // tile_size) * tile_size
+                trap_tile_y = int(trap['y'] // tile_size) * tile_size
+                if abs(i - trap_tile_x) < tile_size and abs(j - trap_tile_y) < tile_size:
+                    is_trap = True
+                    break
+            
+            if is_trap:
+                glColor3f(1.0, 0.0, 0.0)  # Red color for trap tiles
+            elif ((i // tile_size) + (j // tile_size)) % 2 == 0:
+                if dark_mode:
+                    glColor3f(0.2, 0.2, 0.2)  # Dark gray for dark mode
+                else:
+                    glColor3f(0.8, 0.8, 0.8)  # Light gray for normal mode
             else:
-                glColor3f(0.3, 0.3, 0.3)
+                if dark_mode:
+                    glColor3f(0.1, 0.1, 0.1)  # Very dark gray for dark mode
+                else:
+                    glColor3f(0.3, 0.3, 0.3)  # Dark gray for normal mode
 
             glBegin(GL_QUADS)
             glVertex3f(i, j, 0)
@@ -242,6 +279,50 @@ def draw_player():
     glPopMatrix()
 
 # --------------------------------------------
+def draw_boss():
+    global boss
+    if boss is None:
+        return
+    
+    # Boss body - large intimidating cube
+    glColor3f(0.5, 0.0, 0.5)  # Dark purple
+    glPushMatrix()
+    glTranslatef(boss['x'], boss['y'], boss['size']/2)
+    glutSolidCube(boss['size'])
+    glPopMatrix()
+    
+    # Boss head - large black sphere on top
+    glColor3f(0.0, 0.0, 0.0)
+    glPushMatrix()
+    glTranslatef(boss['x'], boss['y'], boss['size'] * 1.2)
+    glutSolidSphere(boss['size'] * 0.6, 30, 30)
+    glPopMatrix()
+    
+    # Boss eyes - glowing red
+    glColor3f(1.0, 0.0, 0.0)
+    eye_offset = boss['size'] * 0.2
+    eye_z = boss['size'] * 1.2
+    eye_depth = boss['size'] * 0.5
+    
+    glPushMatrix()
+    glTranslatef(boss['x'] - eye_offset, boss['y'] + eye_depth, eye_z)
+    glutSolidSphere(boss['size'] * 0.08, 10, 10)
+    glPopMatrix()
+    
+    glPushMatrix()
+    glTranslatef(boss['x'] + eye_offset, boss['y'] + eye_depth, eye_z)
+    glutSolidSphere(boss['size'] * 0.08, 10, 10)
+    glPopMatrix()
+    
+    # Boss health indicator (small cubes above head)
+    glColor3f(1.0, 0.0, 0.0)
+    for i in range(boss['health']):
+        glPushMatrix()
+        glTranslatef(boss['x'] + (i - boss['health']/2) * 10, boss['y'], boss['size'] * 1.8)
+        glutSolidCube(8)
+        glPopMatrix()
+
+# --------------------------------------------
 def init_treasures():
     global treasures
     treasures = []
@@ -276,6 +357,64 @@ def init_power_ups():
         ptype = random.choice(power_up_types)
         power_ups.append({'x': px, 'y': py, 'size': power_up_size, 'type': ptype, 'active': True})
 
+def init_traps():
+    global traps, LEVEL
+    traps = []
+    if LEVEL == 2:
+        # Add 1 trap in level 2
+        tx = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
+        ty = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
+        traps.append({'x': tx, 'y': ty, 'size': TRAP_SIZE})
+    elif LEVEL == 3:
+        # Add 2 traps in level 3
+        for _ in range(2):
+            tx = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
+            ty = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
+            traps.append({'x': tx, 'y': ty, 'size': TRAP_SIZE})
+    elif LEVEL == 4:
+        # Add 3 traps in level 4
+        for _ in range(3):
+            tx = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
+            ty = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
+            traps.append({'x': tx, 'y': ty, 'size': TRAP_SIZE})
+    elif LEVEL == 5:
+        # Add 4 traps in level 5
+        for _ in range(4):
+            tx = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
+            ty = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
+            traps.append({'x': tx, 'y': ty, 'size': TRAP_SIZE})
+
+def init_boss():
+    global boss, LEVEL, player_x, player_y
+    boss = None
+    if LEVEL == 5:  # Boss only appears in level 1
+        # Keep trying to find a position at least 10 radius away from player
+        min_distance = 10 * BOSS_SIZE  # At least 10 times the boss radius away
+        attempts = 0
+        max_attempts = 100  # Prevent infinite loop
+        
+        while attempts < max_attempts:
+            bx = random.uniform(-GRID_LENGTH + BOSS_SIZE, GRID_LENGTH - BOSS_SIZE)
+            by = random.uniform(-GRID_LENGTH + BOSS_SIZE, GRID_LENGTH - BOSS_SIZE)
+            
+            # Check distance from player
+            dx = bx - player_x
+            dy = by - player_y
+            distance = (dx**2 + dy**2)**0.5
+            
+            if distance >= min_distance:
+                boss = {'x': bx, 'y': by, 'size': BOSS_SIZE, 'speed': BOSS_SPEED, 'health': BOSS_HEALTH, 'shoot_timer': 0}
+                break
+            
+            attempts += 1
+        
+        # If we couldn't find a good spot after max_attempts, place it at a fixed safe location
+        if boss is None:
+            # Place boss at a corner, far from the center where player starts
+            bx = GRID_LENGTH - BOSS_SIZE * 2
+            by = GRID_LENGTH - BOSS_SIZE * 2
+            boss = {'x': bx, 'y': by, 'size': BOSS_SIZE, 'speed': BOSS_SPEED, 'health': BOSS_HEALTH, 'shoot_timer': 0}
+
 # --------------------------------------------
 def draw_treasures():
     global treasures
@@ -299,18 +438,35 @@ def draw_enemies():
     global enemies
     for e in enemies:
         if e['type'] == 'normal':
+            # Draw body
             glColor3f(1.0, 0.0, 0.0)
             glPushMatrix()
             glTranslatef(e['x'], e['y'], e['size']/2)
             glutSolidCube(e['size'])
             glPopMatrix()
+            
+            # Draw head (bigger and black)
+            glColor3f(0.0, 0.0, 0.0)
+            glPushMatrix()
+            glTranslatef(e['x'], e['y'], e['size'] * 1.2)
+            glutSolidSphere(e['size'] * 0.5, 20, 20)
+            glPopMatrix()
+            
         elif e['type'] == 'block_tower':
+            # Draw body
             glColor3f(0.7, 0.3, 0.9)
             glPushMatrix()
             glTranslatef(e['x'], e['y'], e['size']/2)
             # Draw block tower as a tall cuboid
             glScalef(1, 1, 2)
             glutSolidCube(e['size']/1.5)
+            glPopMatrix()
+            
+            # Draw head (bigger and black)
+            glColor3f(0.0, 0.0, 0.0)
+            glPushMatrix()
+            glTranslatef(e['x'], e['y'], e['size'] * 1.3)
+            glutSolidSphere(e['size'] * 0.4, 15, 15)
             glPopMatrix()
 
 # --------------------------------------------
@@ -337,10 +493,27 @@ def draw_projectiles():
     for pr in projectiles:
         if not pr['active']:
             continue
+        # Boss projectiles are larger and different color
+        if pr.get('source') == 'boss':
+            glColor3f(0.8, 0.0, 0.8)  # Purple for boss projectiles
+        else:
+            glColor3f(1.0, 0.0, 0.0)  # Red for enemy projectiles
         glPushMatrix()
         glTranslatef(pr['x'], pr['y'], pr['size']/2)
         glutSolidSphere(pr['size']/2, 10, 10)
         glPopMatrix()
+
+# --------------------------------------------
+def draw_traps():
+    global traps
+    for trap in traps:
+        # Draw trap marker above the tile
+        glColor3f(1.0, 0.0, 0.0)
+        glPushMatrix()
+        glTranslatef(trap['x'], trap['y'], 5.0)
+        glutSolidCube(trap['size'] * 0.3)
+        glPopMatrix()
+
 # --------------------------------------------
 def move_enemies():
     global enemies, player_x, player_y, projectiles, LEVEL
@@ -365,7 +538,42 @@ def move_enemies():
                 if dist > 10.0:
                     pr_dx = dx / dist
                     pr_dy = dy / dist
-                    projectiles.append({'x': e['x'], 'y': e['y'], 'vx': pr_dx * config['projectile_speed'], 'vy': pr_dy * config['projectile_speed'], 'size': projectile_size, 'active': True, 'source': id(e)})
+                    projectiles.append({'x': e['x'], 'y': e['y'], 'vx': pr_dx * config['projectile_speed'], 'vy': pr_dy * config['projectile_speed'], 'size': projectile_size, 'active': True, 'source': id(e), 'damage': 1})
+
+def move_boss():
+    global boss, player_x, player_y, projectiles
+    if boss is None:
+        return
+    
+    dx = player_x - boss['x']
+    dy = player_y - boss['y']
+    dist = (dx**2 + dy**2)**0.5
+    
+    # Boss moves slowly towards player
+    if dist > 50.0:
+        normalized_dx = dx / dist
+        normalized_dy = dy / dist
+        boss['x'] += boss['speed'] * normalized_dx
+        boss['y'] += boss['speed'] * normalized_dy
+    
+    # Boss shooting - reduced projectile speed
+    boss['shoot_timer'] -= 1
+    if boss['shoot_timer'] <= 0:
+        boss['shoot_timer'] = BOSS_SHOOT_COOLDOWN
+        if dist > 10.0:
+            pr_dx = dx / dist
+            pr_dy = dy / dist
+            # Boss shoots larger, more damaging projectiles with reduced speed
+            projectiles.append({
+                'x': boss['x'], 
+                'y': boss['y'], 
+                'vx': pr_dx * 1.2,  # Further reduced from 4.0 to 2.5
+                'vy': pr_dy * 1.2, 
+                'size': projectile_size * 1.3, 
+                'active': True, 
+                'source': 'boss',
+                'damage': 2
+            })
 
 def move_projectiles():
     global projectiles
@@ -405,15 +613,33 @@ def check_projectile_collision():
         distance = (dx**2 + dy**2)**0.5
         if distance < (player_radius + pr['size']/2):
             if not immortal:
-                life -= 1
+                damage = pr.get('damage', 1)
+                life -= damage
             pr['active'] = False
             if life <= 0:
                 life = 0
                 game_over = True
                 return
 
+def check_boss_collision():
+    global boss, player_x, player_y, life, game_over, immortal
+    if boss is None:
+        return
+    
+    player_radius = player_size * 0.5
+    dx = player_x - boss['x']
+    dy = player_y - boss['y']
+    distance = (dx**2 + dy**2)**0.5
+    if distance < (player_radius + boss['size']/2):
+        if not immortal:
+            life -= 2  # Boss touch reduces life by 2
+        if life <= 0:
+            life = 0
+            game_over = True
+            return
+
 def check_treasure_collision():
-    global treasures, player_x, player_y, score, LEVEL, timer_start, projectiles
+    global treasures, player_x, player_y, score, LEVEL, timer_start, projectiles, boss, game_won
     player_radius = player_size * 0.5
     for t in treasures[:]:
         dx = player_x - t['x']
@@ -422,14 +648,28 @@ def check_treasure_collision():
         if distance < (player_radius + t['size']/2):
             treasures.remove(t)
             score += 1
-    # Check level up
-    if len(treasures) == 0 and LEVEL < 5:
-        LEVEL += 1
-        init_treasures()
-        init_enemies()
-        init_power_ups()
-        projectiles = []
-        timer_start = time.time()
+            
+            # Check if boss is defeated (boss collision reduces its health)
+            if boss is not None:
+                boss['health'] -= 1
+                if boss['health'] <= 0:
+                    boss = None  # Boss is defeated
+    
+    # Check level up or game win
+    if len(treasures) == 0:
+        if LEVEL == 5:
+            # Game won!
+            game_won = True
+            game_over = True
+        elif LEVEL < 5:
+            LEVEL += 1
+            init_treasures()
+            init_enemies()
+            init_power_ups()
+            init_traps()
+            init_boss()
+            projectiles = []
+            timer_start = time.time()
 
 def check_power_up_collision():
     global power_ups, player_x, player_y, life, immortal, immortal_timer
@@ -448,8 +688,21 @@ def check_power_up_collision():
                 immortal_timer = immortal_duration
             p['active'] = False
 
+def check_trap_collision():
+    global traps, player_x, player_y, game_over, immortal, life
+    player_radius = player_size * 0.5
+    for trap in traps:
+        dx = player_x - trap['x']
+        dy = player_y - trap['y']
+        distance = (dx**2 + dy**2)**0.5
+        if distance < (player_radius + trap['size']/2):
+            # Instantly set life to 0 and trigger game over
+            life = 0
+            game_over = True
+            return
+
 def keyboardListener(key, x, y):
-    global player_x, player_y, player_rotate_z, player_speed, score, life, game_over, immortal
+    global player_x, player_y, player_rotate_z, player_speed, score, life, game_over, immortal, immortal_timer, dark_mode
 
     if isinstance(key, bytes):
         k = key.decode('utf-8').lower()
@@ -479,6 +732,20 @@ def keyboardListener(key, x, y):
     elif k == 'd':
         player_rotate_z -= 10.0
         player_rotate_z %= 360.0
+    elif k == 'p':
+        # Toggle immortal mode
+        immortal = not immortal
+        if immortal:
+            immortal_timer = 10000
+        else:
+            immortal_timer = 0.0
+    elif k == 'c':
+        # Toggle dark mode
+        dark_mode = not dark_mode
+        if dark_mode:
+            glClearColor(0.05, 0.05, 0.1, 1.0)  # Dark background
+        else:
+            glClearColor(0.1, 0.2, 0.4, 1.0)  # Normal background
     elif k == 'r':
         restart_game()
 
@@ -530,7 +797,7 @@ def idle():
 
 
 def showScreen():
-    global life, game_over, immortal, timer_start, level_timer
+    global life, game_over, game_won, immortal, timer_start, level_timer
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glLoadIdentity()
     glViewport(0, 0, 1000, 800)
@@ -541,17 +808,24 @@ def showScreen():
     draw_player()
     draw_treasures()
     draw_enemies()
+    draw_boss()  # Draw the boss
     draw_power_ups()
     draw_projectiles()
+    draw_traps()
 
     move_enemies()
+    move_boss()
     move_projectiles()
     check_treasure_collision()
     check_enemy_collision()
+    check_boss_collision()
     check_projectile_collision()
     check_power_up_collision()
+    check_trap_collision()
 
-    if life <= 0 or (timer_start and (time.time() - timer_start) > level_timer):
+    if game_won:
+        draw_text(350, 400, "YOU WON! Press R to restart")
+    elif life <= 0 or (timer_start and (time.time() - timer_start) > level_timer):
         game_over = True
         draw_text(400, 400, "GAME OVER! Press R to restart")
 
@@ -564,6 +838,9 @@ def showScreen():
     if timer_start:
         remaining = max(0, int(level_timer - (time.time() - timer_start)))
         draw_text(10, 680, f"Time Left: {remaining}s")
+    
+    # Controls display
+    draw_text(10, 50, "Controls: WASD=Move, Arrows=Camera, P=Immortal, C=Dark Mode, R=Restart")
 
     glutSwapBuffers()
 
@@ -587,6 +864,8 @@ def main():
     init_treasures()
     init_enemies()
     init_power_ups()
+    init_traps()
+    init_boss()
     timer_start = time.time()
 
     glutMainLoop()
