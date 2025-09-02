@@ -42,7 +42,6 @@ ENEMY_BASE_SPEED = 5.0
 boss = None
 BOSS_SIZE = player_size * 1.0
 BOSS_SPEED = .4
-CROWN_LENGHT = 10
 BOSS_SHOOT_COOLDOWN = 60
 
 power_ups = []
@@ -52,7 +51,7 @@ power_up_chance = 0.5
 
 immortal = False
 immortal_timer = 0.0
-immortal_duration = 50 
+immortal_duration = 20
 
 projectiles = []
 projectile_size = player_size * 0.2
@@ -65,7 +64,7 @@ traps = []
 TRAP_SIZE = player_size * 0.8
 
 LEVEL_ENEMY_CONFIG = {
-    1: {'num_enemies': 0, 'speed': 0.1, 'projectile_enemies': 0, 'projectile_speed': 0.0},
+    1: {'num_enemies': 1, 'speed': 0.1, 'projectile_enemies': 0, 'projectile_speed': 0.0},
     2: {'num_enemies': 1, 'speed': 0.1, 'projectile_enemies': 1, 'projectile_speed': 0.3},
     3: {'num_enemies': 2, 'speed': 0.2, 'projectile_enemies': 2, 'projectile_speed': 0.4},
     4: {'num_enemies': 3, 'speed': 0.5, 'projectile_enemies': 3, 'projectile_speed': 0.6},
@@ -112,10 +111,10 @@ def restart_game():
     cam_height = INITIAL_CAM_HEIGHT
     camera_pos = INITIAL_CAMERA_POS  
 
+    init_traps()
     init_treasures()
     init_enemies()
     init_power_ups()
-    init_traps()
     init_boss()
 
 
@@ -285,29 +284,53 @@ def draw_boss():
     glutSolidSphere(boss['size'] * 0.08, 10, 10)
     glPopMatrix()
     
-    glColor3f(1.0, 0.0, 0.0)
-    for i in range(boss['crown_length']):
-        glPushMatrix()
-        glTranslatef(boss['x'] + (i - boss['crown_length']/2) * 10, boss['y'], boss['size'] * 1.8)
-        glutSolidCube(8)
-        glPopMatrix()
+
+def check_overlap_with_traps(x, y, size):
+    tile_size = 100
+    for trap in traps:
+        trap_tile_x = int(trap['x'] // tile_size) * tile_size
+        trap_tile_y = int(trap['y'] // tile_size) * tile_size
+        
+        treasure_tile_x = int(x // tile_size) * tile_size
+        treasure_tile_y = int(y // tile_size) * tile_size
+        
+        if trap_tile_x == treasure_tile_x and trap_tile_y == treasure_tile_y:
+            return True
+    return False
+
 
 def init_treasures():
     global treasures
     treasures = []
     for _ in range(NUM_TREASURES):
-        tx = random.uniform(-GRID_LENGTH + TREASURE_BASE_SIZE, GRID_LENGTH - TREASURE_BASE_SIZE)
-        ty = random.uniform(-GRID_LENGTH + TREASURE_BASE_SIZE, GRID_LENGTH - TREASURE_BASE_SIZE)
-        treasures.append({'x': tx, 'y': ty, 'size': TREASURE_BASE_SIZE, 'pulse_dir': 1})
+        attempts = 0
+        max_attempts = 100
+        while attempts < max_attempts:
+            tx = random.uniform(-GRID_LENGTH + TREASURE_BASE_SIZE, GRID_LENGTH - TREASURE_BASE_SIZE)
+            ty = random.uniform(-GRID_LENGTH + TREASURE_BASE_SIZE, GRID_LENGTH - TREASURE_BASE_SIZE)
+            
+            if not check_overlap_with_traps(tx, ty, TREASURE_BASE_SIZE):
+                treasures.append({'x': tx, 'y': ty, 'size': TREASURE_BASE_SIZE, 'pulse_dir': 1})
+                break
+            
+            attempts += 1
+        
+        if attempts >= max_attempts:
+            safe_x = random.uniform(-GRID_LENGTH + TREASURE_BASE_SIZE, GRID_LENGTH - TREASURE_BASE_SIZE)
+            safe_y = random.uniform(-GRID_LENGTH + TREASURE_BASE_SIZE, GRID_LENGTH - TREASURE_BASE_SIZE)
+            treasures.append({'x': safe_x, 'y': safe_y, 'size': TREASURE_BASE_SIZE, 'pulse_dir': 1})
+
 
 def init_enemies():
     global enemies, LEVEL
     enemies = []
     config = LEVEL_ENEMY_CONFIG.get(LEVEL, {'num_enemies': 0, 'speed': ENEMY_BASE_SPEED, 'projectile_enemies': 0, 'projectile_speed': projectile_speed})
+    
     for _ in range(config['num_enemies']):
         ex = random.uniform(-GRID_LENGTH + ENEMY_SIZE, GRID_LENGTH - ENEMY_SIZE)
         ey = random.uniform(-GRID_LENGTH + ENEMY_SIZE, GRID_LENGTH - ENEMY_SIZE)
         enemies.append({'x': ex, 'y': ey, 'size': ENEMY_SIZE, 'speed': config['speed'], 'type': 'normal', 'projectile': None})
+    
     for _ in range(config['projectile_enemies']):
         ex = random.uniform(-GRID_LENGTH + ENEMY_SIZE, GRID_LENGTH - ENEMY_SIZE)
         ey = random.uniform(-GRID_LENGTH + ENEMY_SIZE, GRID_LENGTH - ENEMY_SIZE)
@@ -323,33 +346,66 @@ def init_power_ups():
         power_ups.append({'x': px, 'y': py, 'size': power_up_size, 'type': ptype, 'active': True})
 
 def init_traps():
-    global traps, LEVEL
+    global traps, LEVEL, player_x, player_y
     traps = []
+    tile_size = 100
+    
+    min_distance_from_start = 200
+    
     if LEVEL == 2:
-        tx = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
-        ty = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
-        traps.append({'x': tx, 'y': ty, 'size': TRAP_SIZE})
+        num_traps = 1
     elif LEVEL == 3:
-        for _ in range(2):
-            tx = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
-            ty = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
-            traps.append({'x': tx, 'y': ty, 'size': TRAP_SIZE})
+        num_traps = 2
     elif LEVEL == 4:
-        for _ in range(3):
-            tx = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
-            ty = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
-            traps.append({'x': tx, 'y': ty, 'size': TRAP_SIZE})
+        num_traps = 3
     elif LEVEL == 5:
-        for _ in range(4):
-            tx = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
-            ty = random.uniform(-GRID_LENGTH + TRAP_SIZE, GRID_LENGTH - TRAP_SIZE)
+        num_traps = 4
+    else:
+        num_traps = 0
+    
+    for _ in range(num_traps):
+        attempts = 0
+        max_attempts = 100
+        
+        while attempts < max_attempts:
+            tile_x = random.randint(-GRID_LENGTH // tile_size, GRID_LENGTH // tile_size - 1) * tile_size
+            tile_y = random.randint(-GRID_LENGTH // tile_size, GRID_LENGTH // tile_size - 1) * tile_size
+            
+            tx = tile_x + tile_size // 2
+            ty = tile_y + tile_size // 2
+            
+            distance_from_start = (tx**2 + ty**2)**0.5
+            
+            overlaps_existing = False
+            for existing_trap in traps:
+                dx = tx - existing_trap['x']
+                dy = ty - existing_trap['y']
+                distance = (dx**2 + dy**2)**0.5
+                if distance < tile_size:
+                    overlaps_existing = True
+                    break
+            
+            if distance_from_start >= min_distance_from_start and not overlaps_existing:
+                traps.append({'x': tx, 'y': ty, 'size': TRAP_SIZE})
+                break
+            
+            attempts += 1
+        
+        if attempts >= max_attempts:
+            corner_positions = [
+                (-GRID_LENGTH + tile_size, -GRID_LENGTH + tile_size),
+                (GRID_LENGTH - tile_size, -GRID_LENGTH + tile_size),
+                (-GRID_LENGTH + tile_size, GRID_LENGTH - tile_size),
+                (GRID_LENGTH - tile_size, GRID_LENGTH - tile_size)
+            ]
+            tx, ty = random.choice(corner_positions)
             traps.append({'x': tx, 'y': ty, 'size': TRAP_SIZE})
 
 def init_boss():
     global boss, LEVEL, player_x, player_y
     boss = None
     if LEVEL == 5:
-        min_distance = 10 * BOSS_SIZE
+        min_distance = 10 * BOSS_SIZE 
         attempts = 0
         max_attempts = 100
         
@@ -362,7 +418,7 @@ def init_boss():
             distance = (dx**2 + dy**2)**0.5
             
             if distance >= min_distance:
-                boss = {'x': bx, 'y': by, 'size': BOSS_SIZE, 'speed': BOSS_SPEED, 'crown_length': CROWN_LENGHT, 'shoot_timer': 0}
+                boss = {'x': bx, 'y': by, 'size': BOSS_SIZE, 'speed': BOSS_SPEED,'shoot_timer': 0}
                 break
             
             attempts += 1
@@ -370,7 +426,7 @@ def init_boss():
         if boss is None:
             bx = GRID_LENGTH - BOSS_SIZE * 2
             by = GRID_LENGTH - BOSS_SIZE * 2
-            boss = {'x': bx, 'y': by, 'size': BOSS_SIZE, 'speed': BOSS_SPEED, 'crown_length': CROWN_LENGHT, 'shoot_timer': 0}
+            boss = {'x': bx, 'y': by, 'size': BOSS_SIZE, 'speed': BOSS_SPEED,'shoot_timer': 0}
 
 def draw_treasures():
     global treasures
@@ -541,6 +597,7 @@ def check_enemy_collision():
                 game_over = True
                 return
 
+
 def check_projectile_collision():
     global projectiles, player_x, player_y, life, game_over, immortal
     player_radius = player_size * 0.5
@@ -587,8 +644,6 @@ def check_treasure_collision():
         if distance < (player_radius + t['size']/2):
             treasures.remove(t)
             score += 1
-            
-
     
     if len(treasures) == 0:
         if LEVEL == 5:
@@ -596,10 +651,10 @@ def check_treasure_collision():
             game_over = True
         elif LEVEL < 5:
             LEVEL += 1
+            init_traps()
             init_treasures()
             init_enemies()
             init_power_ups()
-            init_traps()
             init_boss()
             projectiles = []
             timer_start = time.time()
@@ -618,11 +673,14 @@ def check_power_up_collision():
                 life += 1
             else:
                 immortal = True
-                immortal_timer = 20;
+                immortal_timer = immortal_duration
             p['active'] = False
 
 def check_trap_collision():
     global traps, player_x, player_y, game_over, immortal, life
+    if immortal:
+        return
+        
     player_radius = player_size * 0.5
     for trap in traps:
         dx = player_x - trap['x']
@@ -631,8 +689,7 @@ def check_trap_collision():
         if distance < (player_radius + trap['size']/2):
             life = 0
             game_over = True
-            return
-
+            
 def keyboardListener(key, x, y):
     global player_x, player_y, player_rotate_z, player_speed, score, life, game_over, immortal, immortal_timer, dark_mode
 
@@ -665,17 +722,19 @@ def keyboardListener(key, x, y):
         player_rotate_z -= 10.0
         player_rotate_z %= 360.0
     elif k == 'p':
+        # Toggle immortal mode
         immortal = not immortal
         if immortal:
             immortal_timer = 10000
         else:
             immortal_timer = 0.0
     elif k == 'c':
+        # Toggle dark mode
         dark_mode = not dark_mode
         if dark_mode:
-            glClearColor(0.05, 0.05, 0.1, 1.0)
+            glClearColor(0.05, 0.05, 0.1, 1.0)  # Dark background
         else:
-            glClearColor(0.1, 0.2, 0.4, 1.0)
+            glClearColor(0.1, 0.2, 0.4, 1.0)  # Normal background
     elif k == 'r':
         restart_game()
 
@@ -696,8 +755,10 @@ def specialKeyListener(key, x, y):
     cam_z = cam_height
     camera_pos = (cam_x, cam_y, cam_z)
 
+
 def mouseListener(button, state, x, y):
     pass
+
 
 def setupCamera():
     glMatrixMode(GL_PROJECTION)
@@ -708,6 +769,7 @@ def setupCamera():
 
     x, y, z = camera_pos
     gluLookAt(x, y, z, 0, 0, 0, 0, 0, 1)
+
 
 def idle():
     global immortal, immortal_timer, game_over, timer_start, level_timer
@@ -722,6 +784,7 @@ def idle():
             game_over = True
     glutPostRedisplay()
 
+
 def showScreen():
     global life, game_over, game_won, immortal, timer_start, level_timer
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -734,7 +797,7 @@ def showScreen():
     draw_player()
     draw_treasures()
     draw_enemies()
-    draw_boss()
+    draw_boss()  # Draw the boss
     draw_power_ups()
     draw_projectiles()
     draw_traps()
@@ -760,10 +823,12 @@ def showScreen():
     draw_text(10, 720, f"Life: {life}")
     if immortal:
         draw_text(10, 700, f"IMMORTAL: {int(immortal_timer)}s")
+    # Timer display
     if timer_start:
         remaining = max(0, int(level_timer - (time.time() - timer_start)))
         draw_text(10, 680, f"Time Left: {remaining}s")
     
+    # Controls display
     draw_text(10, 50, "Controls: WASD=Move, Arrows=Camera, P=Immortal, C=Dark Mode, R=Restart")
 
     glutSwapBuffers()
@@ -785,10 +850,10 @@ def main():
     glutMouseFunc(mouseListener)
     glutIdleFunc(idle)
 
+    init_traps()  # Initialize traps first
     init_treasures()
     init_enemies()
     init_power_ups()
-    init_traps()
     init_boss()
     timer_start = time.time()
 
